@@ -9,6 +9,7 @@ from detectron2.engine import DefaultTrainer, DefaultPredictor
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from detectron2.data.datasets import register_coco_instances, load_coco_json
+from detectron2.data import build_detection_test_loader, build_detection_train_loader
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,6 +18,36 @@ from pycocotools import mask
 
 from segments.utils import export_dataset
 
+def build_sem_seg_train_aug(cfg):
+    augs = [
+        T.ResizeShortestEdge(
+            cfg.INPUT.MIN_SIZE_TRAIN, cfg.INPUT.MAX_SIZE_TRAIN, cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
+        )
+    ]
+    if cfg.INPUT.CROP.ENABLED:
+        augs.append(
+            T.RandomCrop_CategoryAreaConstraint(
+                cfg.INPUT.CROP.TYPE,
+                cfg.INPUT.CROP.SIZE,
+                cfg.INPUT.CROP.SINGLE_CATEGORY_MAX_AREA,
+                cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
+            )
+        )
+    augs.append(T.RandomFlip())
+    return augs
+
+class Trainer(DefaultTrainer):
+
+    @classmethod
+    def build_test_loader(cls, cfg):
+        print("using custom trainer")
+        print(cfg.MODEL.META_ARCHITECTURE)
+        if "SemanticSegmentor" in cfg.MODEL.META_ARCHITECTURE:
+            print("using custom data augmentation mapper")
+            mapper = DatasetMapper(cfg, is_train=False, augmentations=build_sem_seg_train_aug(cfg))
+        else:
+            mapper = None
+        return build_detection_train_loader(cfg, mapper=mapper)
 
 class Model:
     def __init__(self, predictor):
@@ -46,6 +77,7 @@ class Model:
     
 
 def train_model(dataset):
+    print("training model: v0.4")
     # Export the dataset to COCO format
     export_file, image_dir = export_dataset(dataset, export_format='coco-instance')
     
@@ -57,7 +89,7 @@ def train_model(dataset):
     dataset_dicts = load_coco_json(export_file, image_dir)
     MetadataCatalog.get('my_dataset').set(thing_classes=[c['name'] for c in dataset.categories])
     segments_metadata = MetadataCatalog.get('my_dataset')
-    print(segments_metadata)
+    # print(segments_metadata)
     
     # Configure the training run
     cfg = get_cfg()
@@ -76,7 +108,7 @@ def train_model(dataset):
 
     # Start the training
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
-    trainer = DefaultTrainer(cfg) 
+    trainer = Trainer(cfg) 
     trainer.resume_or_load(resume=False)
     trainer.train()
     
